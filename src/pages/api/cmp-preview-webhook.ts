@@ -159,9 +159,7 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     // 4. Complete
     const completeBody = JSON.stringify({
         keyed_previews: {
-            'Live Preview': {
-                url: previewUrl.toString(),
-            },
+            'Live Preview': previewUrl.toString(),
         },
     });
     console.log(`${LOG} Sending complete to ${completeUrl} with body: ${completeBody}`);
