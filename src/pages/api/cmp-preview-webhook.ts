@@ -30,7 +30,7 @@ import {
     encodePreviewData,
     signPreviewData,
 } from '../../lib/cmp-preview-utils';
-import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid } from '../../lib/cmp-api';
+import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid, fetchCmpAssetUrl } from '../../lib/cmp-api';
 import { CMP_WEBHOOK_SECRET, CMP_CLIENT_ID, CMP_CLIENT_SECRET } from 'astro:env/server';
 
 export const prerender = false;
@@ -163,13 +163,12 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     const author     = getCmpTextField(fields, 'author');
     const bodyHtml   = getCmpRichTextField(fields, 'body');
     const publishedDate = (structuredContents[0]?.content_body?.created_at ?? '') as string;
-    // Skipping promoImage CDN resolution here to stay within Vercel Hobby's 10s
-    // function timeout. The image asset GUID is stored for future use.
     const promoAssetGuid = getCmpAssetGuid(fields, 'promoImage');
-    console.log(`${LOG} Fields extracted — heading="${heading}", promoAssetGuid="${promoAssetGuid}"`);
+    const promoImageUrl = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) : null;
+    console.log(`${LOG} Fields extracted — heading="${heading}", promoImageUrl="${promoImageUrl}"`);
 
     // Encode + sign content data directly in the URL — preview page needs zero API calls
-    const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl: null });
+    const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl });
     const sig = signPreviewData(encoded, CMP_WEBHOOK_SECRET);
 
     const previewUrl = new URL('/cmp-preview', requestUrl.origin);
