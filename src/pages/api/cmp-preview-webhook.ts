@@ -30,7 +30,7 @@ import {
     encodePreviewData,
     signPreviewData,
 } from '../../lib/cmp-preview-utils';
-import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid, fetchCmpAssetUrl } from '../../lib/cmp-api';
+import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid } from '../../lib/cmp-api';
 import { CMP_WEBHOOK_SECRET, CMP_CLIENT_ID, CMP_CLIENT_SECRET } from 'astro:env/server';
 
 export const prerender = false;
@@ -163,33 +163,32 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     const author     = getCmpTextField(fields, 'author');
     const bodyHtml   = getCmpRichTextField(fields, 'body');
     const publishedDate = (structuredContents[0]?.content_body?.created_at ?? '') as string;
+    // Skipping promoImage CDN resolution here to stay within Vercel Hobby's 10s
+    // function timeout. The image asset GUID is stored for future use.
     const promoAssetGuid = getCmpAssetGuid(fields, 'promoImage');
+    console.log(`${LOG} Fields extracted — heading="${heading}", promoAssetGuid="${promoAssetGuid}"`);
 
-    // Resolve promo image CDN URL here so the preview page needs zero CMP API calls
-    const promoImageUrl = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) : null;
-    console.log(`${LOG} Fields extracted — heading="${heading}", promoAssetGuid="${promoAssetGuid}", promoImageUrl="${promoImageUrl}"`);
-
-    // Encode + sign content data directly in the URL
-    const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl });
+    // Encode + sign content data directly in the URL — preview page needs zero API calls
+    const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl: null });
     const sig = signPreviewData(encoded, CMP_WEBHOOK_SECRET);
 
     const previewUrl = new URL('/cmp-preview', requestUrl.origin);
     previewUrl.searchParams.set('d', encoded);
     previewUrl.searchParams.set('s', sig);
-    console.log(`${LOG} Preview URL (${previewUrl.toString().length} chars): ${previewUrl.toString()}`);
+    console.log(`${LOG} Preview URL (${previewUrl.toString().length} chars)`);
 
-    // 4. Complete — fire and forget so CMP's 29s API Gateway timeout doesn't block
-    //    our webhook response. Vercel's Node runtime keeps the function alive while
-    //    the promise is pending (up to maxDuration in vercel.json).
-    void callComplete(completeUrl, previewUrl.toString(), accessToken);
+    // 4. Complete — awaited synchronously so it finishes within Vercel's 10s window.
+    //    Vercel freezes the process after the response is sent, so fire-and-forget
+    //    does not work on Hobby. With the fast preview page (~3-4s render), the
+    //    complete call returns well before the 10s limit.
+    const completeResult = await callComplete(completeUrl, previewUrl.toString(), accessToken);
 
-    console.log(`${LOG} Returning 200 to CMP; complete running in background`);
-    return respond({ success: true, previewUrl: previewUrl.toString() }, 200);
+    return respond({ success: completeResult, previewUrl: previewUrl.toString() }, 200);
 };
 
-async function callComplete(completeUrl: string, previewUrl: string, accessToken: string): Promise<void> {
+async function callComplete(completeUrl: string, previewUrl: string, accessToken: string): Promise<boolean> {
     const body = JSON.stringify({ keyed_previews: { 'Live Preview': previewUrl } });
-    console.log(`${LOG} [bg] Sending complete to ${completeUrl}`);
+    console.log(`${LOG} Sending complete to ${completeUrl}`);
     try {
         const res = await fetch(completeUrl, {
             method: 'POST',
@@ -198,12 +197,15 @@ async function callComplete(completeUrl: string, previewUrl: string, accessToken
         });
         const resBody = await res.text();
         if (res.ok) {
-            console.log(`${LOG} [bg] Complete response: ${res.status} — preview registered`);
+            console.log(`${LOG} Complete response: ${res.status} — preview registered`);
+            return true;
         } else {
-            console.error(`${LOG} [bg] Complete failed: ${res.status} ${resBody}`);
+            console.error(`${LOG} Complete failed: ${res.status} ${resBody}`);
+            return false;
         }
     } catch (err) {
-        console.error(`${LOG} [bg] Complete threw:`, err);
+        console.error(`${LOG} Complete threw:`, err);
+        return false;
     }
 }
 
