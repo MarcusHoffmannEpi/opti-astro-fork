@@ -2,55 +2,30 @@
 /**
  * CMP Preview Page
  *
- * Fetches structured content directly from the CMP API and renders it using
- * the ArticlePage visual template. Called by CMP's preview iframe after the
- * webhook handler posts the signed URL via the complete endpoint.
+ * Decodes content fields embedded directly in the URL by the webhook handler —
+ * no CMP API calls needed here, keeping render time well under 10 seconds on
+ * Vercel Hobby.
  *
- * URL shape: /cmp-preview?content_id={id}&version_id={vid}&token={hmac}
+ * URL shape: /cmp-preview?d={base64url-data}&s={hmac-sig}
  */
 
-import { validateCmpPreviewToken } from '../lib/cmp-preview-utils';
-import { fetchCmpContent, fetchCmpAssetUrl, getCmpTextField, getCmpRichTextField, getCmpAssetGuid } from '../lib/cmp-api';
+import { verifyPreviewData, decodePreviewData } from '../lib/cmp-preview-utils';
 import ArticlePageCmpPreview from '../cms/pages/ArticlePage/ArticlePageCmpPreview.astro';
 import { CMP_WEBHOOK_SECRET } from 'astro:env/server';
 
-const contentId = Astro.url.searchParams.get('content_id') ?? '';
-const versionId = Astro.url.searchParams.get('version_id') ?? '';
-const token     = Astro.url.searchParams.get('token') ?? '';
+const encoded = Astro.url.searchParams.get('d') ?? '';
+const sig     = Astro.url.searchParams.get('s') ?? '';
 
-if (!contentId || !versionId || !token || !CMP_WEBHOOK_SECRET) {
+if (!encoded || !sig || !CMP_WEBHOOK_SECRET) {
     return Astro.redirect('/404', 404);
 }
 
-if (!validateCmpPreviewToken(contentId, versionId, token, CMP_WEBHOOK_SECRET as string)) {
+if (!verifyPreviewData(encoded, sig, CMP_WEBHOOK_SECRET as string)) {
     return Astro.redirect('/404', 404);
 }
 
-let cmpContent: any;
-try {
-    cmpContent = await fetchCmpContent(contentId, versionId);
-} catch (err) {
-    console.error('[CMP Preview] Failed to fetch content from CMP API:', err);
-    return new Response(
-        `<!doctype html><html><body style="font-family:sans-serif;padding:2rem">
-            <p>Could not load preview — failed to fetch content from CMP.</p>
-        </body></html>`,
-        { status: 502, headers: { 'Content-Type': 'text/html' } }
-    );
-}
-
-const fields = cmpContent?.content_body?.fields_version?.fields ?? {};
+const { heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl } = decodePreviewData(encoded);
 const locale = Astro.currentLocale ?? 'en';
-
-const heading    = getCmpTextField(fields, 'heading');
-const subHeading = getCmpTextField(fields, 'subHeading');
-const author     = getCmpTextField(fields, 'author');
-const bodyHtml   = getCmpRichTextField(fields, 'body');
-const publishedDate = cmpContent?.content_body?.created_at ?? undefined;
-
-// Resolve promo image CDN URL from CMP asset guid
-const promoAssetGuid = getCmpAssetGuid(fields, 'promoImage');
-const promoImageUrl  = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) ?? undefined : undefined;
 ---
 
 <ArticlePageCmpPreview
@@ -58,7 +33,7 @@ const promoImageUrl  = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) ?
     subHeading={subHeading}
     author={author}
     bodyHtml={bodyHtml}
-    promoImageUrl={promoImageUrl}
+    promoImageUrl={promoImageUrl ?? undefined}
     publishedDate={publishedDate}
     locale={locale}
 />

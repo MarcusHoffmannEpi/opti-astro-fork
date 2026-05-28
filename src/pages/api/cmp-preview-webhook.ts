@@ -24,7 +24,13 @@
  */
 
 import type { APIRoute } from 'astro';
-import { validateWebhookSecret, parseCmpPreviewIds, generateCmpPreviewToken } from '../../lib/cmp-preview-utils';
+import {
+    validateWebhookSecret,
+    parseCmpPreviewIds,
+    encodePreviewData,
+    signPreviewData,
+} from '../../lib/cmp-preview-utils';
+import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid, fetchCmpAssetUrl } from '../../lib/cmp-api';
 import { CMP_WEBHOOK_SECRET, CMP_CLIENT_ID, CMP_CLIENT_SECRET } from 'astro:env/server';
 
 export const prerender = false;
@@ -150,13 +156,27 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
         return respond({ error: 'Acknowledge step failed' }, 502);
     }
 
-    // 3. Build signed preview URL
-    const token = generateCmpPreviewToken(contentId, versionId, CMP_WEBHOOK_SECRET);
+    // 3. Extract content fields from the already-available payload — no extra API call needed
+    const fields = structuredContents[0]?.content_body?.fields_version?.fields ?? {};
+    const heading    = getCmpTextField(fields, 'heading');
+    const subHeading = getCmpTextField(fields, 'subHeading');
+    const author     = getCmpTextField(fields, 'author');
+    const bodyHtml   = getCmpRichTextField(fields, 'body');
+    const publishedDate = (structuredContents[0]?.content_body?.created_at ?? '') as string;
+    const promoAssetGuid = getCmpAssetGuid(fields, 'promoImage');
+
+    // Resolve promo image CDN URL here so the preview page needs zero CMP API calls
+    const promoImageUrl = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) : null;
+    console.log(`${LOG} Fields extracted — heading="${heading}", promoAssetGuid="${promoAssetGuid}", promoImageUrl="${promoImageUrl}"`);
+
+    // Encode + sign content data directly in the URL
+    const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl });
+    const sig = signPreviewData(encoded, CMP_WEBHOOK_SECRET);
+
     const previewUrl = new URL('/cmp-preview', requestUrl.origin);
-    previewUrl.searchParams.set('content_id', contentId);
-    previewUrl.searchParams.set('version_id', versionId);
-    previewUrl.searchParams.set('token', token);
-    console.log(`${LOG} Preview URL: ${previewUrl.toString()}`);
+    previewUrl.searchParams.set('d', encoded);
+    previewUrl.searchParams.set('s', sig);
+    console.log(`${LOG} Preview URL (${previewUrl.toString().length} chars): ${previewUrl.toString()}`);
 
     // 4. Complete — fire and forget so CMP's 29s API Gateway timeout doesn't block
     //    our webhook response. Vercel's Node runtime keeps the function alive while
@@ -198,8 +218,10 @@ function respond(data: object, status: number): Response {
 
 interface CmpStructuredContent {
     content_body?: {
+        created_at?: string;
         fields_version?: {
             content_hash?: string;
+            fields?: Record<string, any>;
         };
     };
 }
