@@ -30,7 +30,7 @@ import {
     encodePreviewData,
     signPreviewData,
 } from '../../lib/cmp-preview-utils';
-import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid, fetchCmpAssetUrl } from '../../lib/cmp-api';
+import { getCmpTextField, getCmpRichTextField, getCmpAssetGuid } from '../../lib/cmp-api';
 import { CMP_WEBHOOK_SECRET, CMP_CLIENT_ID, CMP_CLIENT_SECRET } from 'astro:env/server';
 
 export const prerender = false;
@@ -133,30 +133,7 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
         return respond({ error: 'CMP authentication failed' }, 502);
     }
 
-    // 2. Acknowledge
-    console.log(`${LOG} Sending acknowledge to ${acknowledgeUrl}`);
-    const ackResponse = await fetch(acknowledgeUrl, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            acknowledged_by: 'cms-preview-handler',
-            content_hash: contentHash,
-        }),
-    });
-
-    const ackBody = await ackResponse.text();
-    console.log(`${LOG} Acknowledge response: ${ackResponse.status} ${ackBody}`);
-
-    // 409 = already acknowledged, 412 = not in requested state (e.g. expired or re-triggered) — both are recoverable, still attempt complete
-    if (!ackResponse.ok && ackResponse.status !== 409 && ackResponse.status !== 412) {
-        console.error(`${LOG} Acknowledge failed (non-recoverable): ${ackResponse.status} ${ackBody}`);
-        return respond({ error: 'Acknowledge step failed' }, 502);
-    }
-
-    // 3. Extract content fields from the already-available payload — no extra API call needed
+    // 2. Extract content fields from the already-available payload
     const fields = structuredContents[0]?.content_body?.fields_version?.fields ?? {};
     const heading    = getCmpTextField(fields, 'heading');
     const subHeading = getCmpTextField(fields, 'subHeading');
@@ -164,8 +141,26 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     const bodyHtml   = getCmpRichTextField(fields, 'body');
     const publishedDate = (structuredContents[0]?.content_body?.created_at ?? '') as string;
     const promoAssetGuid = getCmpAssetGuid(fields, 'promoImage');
-    const promoImageUrl = promoAssetGuid ? await fetchCmpAssetUrl(promoAssetGuid) : null;
-    console.log(`${LOG} Fields extracted — heading="${heading}", promoImageUrl="${promoImageUrl}"`);
+
+    // 3. Acknowledge + asset URL fetch in parallel — both are independent after token
+    console.log(`${LOG} Acknowledging and fetching asset URL in parallel`);
+    const [ackResponse, promoImageUrl] = await Promise.all([
+        fetch(acknowledgeUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ acknowledged_by: 'cms-preview-handler', content_hash: contentHash }),
+        }),
+        promoAssetGuid ? fetchAssetUrl(promoAssetGuid, accessToken) : Promise.resolve(null),
+    ]);
+
+    const ackBody = await ackResponse.text();
+    console.log(`${LOG} Acknowledge: ${ackResponse.status} | promoImageUrl: ${promoImageUrl}`);
+
+    // 409 = already acknowledged, 412 = not in requested state — both recoverable
+    if (!ackResponse.ok && ackResponse.status !== 409 && ackResponse.status !== 412) {
+        console.error(`${LOG} Acknowledge failed (non-recoverable): ${ackResponse.status} ${ackBody}`);
+        return respond({ error: 'Acknowledge step failed' }, 502);
+    }
 
     // Encode + sign content data directly in the URL — preview page needs zero API calls
     const encoded = encodePreviewData({ heading, subHeading, author, bodyHtml, publishedDate, promoImageUrl });
@@ -184,6 +179,26 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
 
     return respond({ success: completeResult, previewUrl: previewUrl.toString() }, 200);
 };
+
+async function fetchAssetUrl(assetGuid: string, token: string): Promise<string | null> {
+    try {
+        const res = await fetch(`https://api.welcomesoftware.com/v3/asset-urls/${assetGuid}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            redirect: 'follow',
+            cache: 'no-store',
+        });
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type') ?? '';
+        if (ct.includes('application/json')) {
+            const data = await res.json();
+            return data.original_url ?? data.url ?? null;
+        }
+        const redirected = res.url !== `https://api.welcomesoftware.com/v3/asset-urls/${assetGuid}`;
+        return redirected ? res.url : null;
+    } catch {
+        return null;
+    }
+}
 
 async function callComplete(completeUrl: string, previewUrl: string, accessToken: string): Promise<boolean> {
     const body = JSON.stringify({ keyed_previews: { 'Live Preview': previewUrl } });
