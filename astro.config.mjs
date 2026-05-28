@@ -120,6 +120,23 @@ export default defineConfig({
             }),
             // Note: ASTRO_I18N_CONFIG is a build-time only variable (used in astro.config.mjs)
             // It's not included in the env schema since it's not needed at runtime
+
+            // Optimizely CMP Preview integration
+            CMP_WEBHOOK_SECRET: envField.string({
+                context: 'server',
+                access: 'secret',
+                optional: true,
+            }),
+            CMP_CLIENT_ID: envField.string({
+                context: 'server',
+                access: 'secret',
+                optional: true,
+            }),
+            CMP_CLIENT_SECRET: envField.string({
+                context: 'server',
+                access: 'secret',
+                optional: true,
+            }),
         },
     },
 
