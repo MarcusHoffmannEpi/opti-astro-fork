@@ -57,8 +57,13 @@ export const onRequest = defineMiddleware(async (context, next) => {
     const locale = localeToSdkLocale(context.currentLocale) as Locales;
     
     try {
-      // Get placeholders from GraphQL
-      const placeholders = await getPlaceholders(domain, locale);
+      // Get placeholders from GraphQL with a 3s timeout.
+      // If Graph is slow on cold start the page still returns immediately;
+      // the query continues in background and populates the cache for subsequent requests.
+      const placeholders = await Promise.race([
+        getPlaceholders(domain, locale),
+        new Promise<Map<string, string>>(resolve => setTimeout(() => resolve(new Map()), 3000)),
+      ]);
       
       // Replace placeholders in HTML
       let processedHtml = html;
