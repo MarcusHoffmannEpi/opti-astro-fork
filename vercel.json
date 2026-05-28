@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "src/pages/api/cmp-preview-webhook.ts": {
+      "maxDuration": 60
+    }
+  }
+}

@@ -158,34 +158,34 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     previewUrl.searchParams.set('token', token);
     console.log(`${LOG} Preview URL: ${previewUrl.toString()}`);
 
-    // 4. Complete
-    const completeBody = JSON.stringify({
-        keyed_previews: {
-            'Live Preview': previewUrl.toString(),
-        },
-    });
-    console.log(`${LOG} Sending complete to ${completeUrl} with body: ${completeBody}`);
+    // 4. Complete — fire and forget so CMP's 29s API Gateway timeout doesn't block
+    //    our webhook response. Vercel's Node runtime keeps the function alive while
+    //    the promise is pending (up to maxDuration in vercel.json).
+    void callComplete(completeUrl, previewUrl.toString(), accessToken);
 
-    const completeResponse = await fetch(completeUrl, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-        },
-        body: completeBody,
-    });
-
-    const completeResponseBody = await completeResponse.text();
-    console.log(`${LOG} Complete response: ${completeResponse.status} ${completeResponseBody}`);
-
-    if (!completeResponse.ok) {
-        console.error(`${LOG} Complete step failed: ${completeResponse.status} ${completeResponseBody}`);
-        return respond({ error: 'Complete step failed' }, 502);
-    }
-
-    console.log(`${LOG} Preview flow completed successfully`);
+    console.log(`${LOG} Returning 200 to CMP; complete running in background`);
     return respond({ success: true, previewUrl: previewUrl.toString() }, 200);
 };
+
+async function callComplete(completeUrl: string, previewUrl: string, accessToken: string): Promise<void> {
+    const body = JSON.stringify({ keyed_previews: { 'Live Preview': previewUrl } });
+    console.log(`${LOG} [bg] Sending complete to ${completeUrl}`);
+    try {
+        const res = await fetch(completeUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body,
+        });
+        const resBody = await res.text();
+        if (res.ok) {
+            console.log(`${LOG} [bg] Complete response: ${res.status} — preview registered`);
+        } else {
+            console.error(`${LOG} [bg] Complete failed: ${res.status} ${resBody}`);
+        }
+    } catch (err) {
+        console.error(`${LOG} [bg] Complete threw:`, err);
+    }
+}
 
 function respond(data: object, status: number): Response {
     return new Response(JSON.stringify(data), {
