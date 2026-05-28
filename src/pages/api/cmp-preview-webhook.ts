@@ -104,6 +104,7 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     console.log(`${LOG} acknowledgeUrl="${acknowledgeUrl}"`);
     console.log(`${LOG} completeUrl="${completeUrl}"`);
     console.log(`${LOG} structuredContents count=${structuredContents.length}, contentHash="${contentHash}"`);
+    console.log(`${LOG} Full structured content payload: ${JSON.stringify(structuredContents[0], null, 2)}`);
 
     if (!acknowledgeUrl || !completeUrl || !contentHash) {
         console.error(`${LOG} Missing required fields — acknowledgeUrl=${!!acknowledgeUrl}, completeUrl=${!!completeUrl}, contentHash=${!!contentHash}`);
@@ -143,7 +144,8 @@ export const POST: APIRoute = async ({ request, url: requestUrl }) => {
     const ackBody = await ackResponse.text();
     console.log(`${LOG} Acknowledge response: ${ackResponse.status} ${ackBody}`);
 
-    if (!ackResponse.ok && ackResponse.status !== 409) {
+    // 409 = already acknowledged, 412 = not in requested state (e.g. expired or re-triggered) — both are recoverable, still attempt complete
+    if (!ackResponse.ok && ackResponse.status !== 409 && ackResponse.status !== 412) {
         console.error(`${LOG} Acknowledge failed (non-recoverable): ${ackResponse.status} ${ackBody}`);
         return respond({ error: 'Acknowledge step failed' }, 502);
     }
