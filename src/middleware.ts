@@ -10,7 +10,19 @@ import { checkRedirects } from './lib/redirect-utils';
 const placeholderCache = new Map<string, Map<string, string>>();
 const CACHE_DURATION = 60000; // 1 minute
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
 export const onRequest = defineMiddleware(async (context, next) => {
+  // CMP loads the preview URL from its server (python-httpx) and sends a CORS
+  // preflight first. Return CORS headers immediately without running SSR.
+  if (context.url.pathname.startsWith('/cmp-preview') && context.request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   // Check if this is an admin route
   if (context.url.pathname.startsWith('/opti-admin')) {
     const authError = checkAdminAuth(context.request);
@@ -27,6 +39,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   const response = await next();
   
+  // CMP preview pages must render fast — skip the placeholder GraphQL fetch
+  // (which can take 50s+ on cold start) and add CORS headers for the iframe.
+  if (context.url.pathname.startsWith('/cmp-preview')) {
+    const headers = new Headers(response.headers);
+    Object.entries(CORS_HEADERS).forEach(([k, v]) => headers.set(k, v));
+    return new Response(response.body, { status: response.status, headers });
+  }
+
   // Only process HTML responses
   if (response.headers.get('content-type')?.includes('text/html')) {
     const html = await response.text();
