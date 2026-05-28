@@ -1,0 +1,99 @@
+---
+import { format } from 'date-fns';
+import Layout from '../../../layouts/Layout.astro';
+import type { ContentPayload } from '../../../graphql/shared/ContentPayload';
+
+export interface Props {
+    heading: string;
+    subHeading?: string;
+    author?: string;
+    bodyHtml?: string;
+    promoImageUrl?: string;
+    publishedDate?: string;
+    locale?: string;
+}
+
+const {
+    heading,
+    subHeading,
+    author,
+    bodyHtml,
+    promoImageUrl,
+    publishedDate,
+    locale = 'en',
+} = Astro.props;
+
+const formattedDate = format(
+    publishedDate ? new Date(publishedDate) : new Date(),
+    'dd MMM yyyy'
+);
+
+const hasImage = !!promoImageUrl;
+const headerFontColor   = hasImage ? 'text-neutral-content'      : 'text-base-content';
+const headerAuthorColor = hasImage ? 'text-neutral-content/75'   : 'text-base-content/65';
+const headerDateColor   = hasImage ? 'text-neutral-content/55'   : 'text-base-content/50';
+
+// Minimal payload so Layout can fetch site settings and styles
+const previewPayload: ContentPayload = {
+    ctx: 'ext_preview',
+    key: '',
+    ver: '',
+    loc: locale,
+    preview_token: '',
+    types: ['ArticlePage'],
+};
+---
+
+<Layout
+    title={heading || 'Article Preview'}
+    description={subHeading || ''}
+    graphtype="article"
+    indexing={false}
+    contentPayload={previewPayload}
+    defaultUrl=""
+    hierarchicalUrl=""
+    extPreviewEnabled={false}
+>
+    <div class="max-w-screen-6xl mx-auto page-article">
+        <main class="mt-10">
+            <div
+                class="relative mx-auto mb-4 w-full max-w-screen-xl md:mb-0 bg-base-200"
+                style="height: 24em;"
+            >
+                {hasImage && (
+                    <div
+                        class="absolute bottom-0 start-0 z-10 h-full w-full"
+                        style="background-image: linear-gradient(180deg,transparent,rgba(0,0,0,.7));"
+                    />
+                    <img
+                        src={promoImageUrl}
+                        class="absolute top-0 start-0 z-0 h-full w-full object-cover"
+                        alt={heading || 'Article promo image'}
+                    />
+                )}
+                <div class="absolute bottom-0 start-0 z-20 p-4">
+                    <h1 class={`text-4xl lg:text-6xl leading-tight font-semibold pb-4 ${headerFontColor}`}>
+                        {heading}
+                    </h1>
+                    {subHeading && (
+                        <h2 class={`text-base lg:text-2xl leading-tight font-semibold ${headerFontColor}`}>
+                            {subHeading}
+                        </h2>
+                    )}
+                    <div class="mt-3 flex">
+                        <div>
+                            {author && (
+                                <p class={`text-sm font-semibold ${headerAuthorColor}`}>{author}</p>
+                            )}
+                            <p class={`text-xs font-semibold ${headerDateColor}`}>{formattedDate}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <article
+                class="prose dark:prose-invert md:prose-lg lg:prose-xl mx-auto mt-12 mb-12 max-w-screen-xl px-4 2xl:px-0 prose-img:rounded-[2rem] prose-img:p-4"
+                set:html={bodyHtml}
+            />
+        </main>
+    </div>
+</Layout>
